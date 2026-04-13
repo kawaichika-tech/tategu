@@ -1,0 +1,680 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>建具図面チェッカー</title>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --primary: #1a3a5c;
+      --accent: #e8a020;
+      --error: #c0392b;
+      --ok: #27ae60;
+      --bg: #f4f6f9;
+      --card: #ffffff;
+      --border: #dce3ec;
+      --text: #2c3e50;
+      --muted: #7f8c8d;
+      --radius: 10px;
+    }
+
+    body {
+      font-family: "Hiragino Sans", "Yu Gothic UI", "Meiryo", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+
+    /* ===== HEADER ===== */
+    header {
+      background: var(--primary);
+      color: #fff;
+      padding: 0 32px;
+      height: 64px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+    }
+    header .logo {
+      width: 36px; height: 36px;
+      background: var(--accent);
+      border-radius: 8px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 20px;
+    }
+    header h1 { font-size: 18px; font-weight: 700; letter-spacing: 0.04em; }
+    header span { font-size: 12px; color: #a8c0d8; margin-left: 4px; }
+
+    /* ===== MAIN ===== */
+    main {
+      max-width: 960px;
+      margin: 40px auto;
+      padding: 0 20px;
+    }
+
+    .intro {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-left: 4px solid var(--accent);
+      border-radius: var(--radius);
+      padding: 18px 22px;
+      margin-bottom: 28px;
+      font-size: 14px;
+      line-height: 1.7;
+      color: var(--muted);
+    }
+    .intro strong { color: var(--text); }
+
+    /* ===== UPLOAD GRID ===== */
+    .upload-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin-bottom: 16px;
+    }
+    @media (max-width: 640px) { .upload-grid { grid-template-columns: 1fr; } }
+
+    .upload-card {
+      background: var(--card);
+      border: 2px dashed var(--border);
+      border-radius: var(--radius);
+      padding: 28px 20px;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color 0.2s, background 0.2s;
+      position: relative;
+    }
+    .upload-card:hover, .upload-card.drag-over {
+      border-color: var(--accent);
+      background: #fffdf5;
+    }
+    .upload-card.has-file {
+      border-color: var(--ok);
+      border-style: solid;
+      background: #f0faf4;
+    }
+    .upload-card input[type="file"] { display: none; }
+    .upload-card .icon { font-size: 36px; margin-bottom: 10px; }
+    .upload-card .label {
+      font-size: 14px; font-weight: 700;
+      color: var(--primary); margin-bottom: 4px;
+    }
+    .upload-card .sublabel {
+      font-size: 12px; color: var(--muted);
+    }
+    .upload-card .filename {
+      margin-top: 10px;
+      font-size: 12px;
+      color: var(--ok);
+      font-weight: 600;
+      word-break: break-all;
+    }
+    .upload-card.required .label::after {
+      content: " ＊";
+      color: var(--error);
+    }
+
+    .upload-optional {
+      background: var(--card);
+      border: 1px dashed var(--border);
+      border-radius: var(--radius);
+      padding: 16px 20px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      margin-bottom: 24px;
+      cursor: pointer;
+      transition: border-color 0.2s;
+      position: relative;
+    }
+    .upload-optional:hover { border-color: var(--accent); }
+    .upload-optional.has-file { border-color: var(--ok); background: #f0faf4; }
+    .upload-optional input[type="file"] { display: none; }
+    .upload-optional .icon { font-size: 24px; }
+    .upload-optional .label { font-size: 13px; font-weight: 700; color: var(--primary); }
+    .upload-optional .sublabel { font-size: 12px; color: var(--muted); }
+    .upload-optional .filename { font-size: 12px; color: var(--ok); font-weight: 600; word-break: break-all; }
+
+    /* ===== BUTTON ===== */
+    .btn-check {
+      display: block;
+      width: 100%;
+      padding: 16px;
+      background: var(--primary);
+      color: #fff;
+      border: none;
+      border-radius: var(--radius);
+      font-size: 16px;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      cursor: pointer;
+      transition: background 0.2s, transform 0.1s;
+      margin-bottom: 32px;
+    }
+    .btn-check:hover:not(:disabled) { background: #254d80; transform: translateY(-1px); }
+    .btn-check:disabled { background: #a0b0c0; cursor: not-allowed; }
+
+    /* ===== PROGRESS ===== */
+    .progress-wrap {
+      display: none;
+      margin-bottom: 24px;
+    }
+    .progress-wrap.active { display: block; }
+    .progress-label {
+      font-size: 14px; color: var(--muted);
+      margin-bottom: 8px;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .spinner {
+      width: 16px; height: 16px;
+      border: 3px solid #dce3ec;
+      border-top-color: var(--primary);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      display: inline-block;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .progress-bar-track {
+      height: 6px; background: var(--border);
+      border-radius: 99px; overflow: hidden;
+    }
+    .progress-bar {
+      height: 100%; background: var(--accent);
+      border-radius: 99px;
+      width: 0%;
+      transition: width 0.4s ease;
+    }
+
+    /* ===== ERROR BOX ===== */
+    .error-box {
+      display: none;
+      background: #fdf0ef;
+      border: 1px solid #e8b4b0;
+      border-left: 4px solid var(--error);
+      border-radius: var(--radius);
+      padding: 14px 18px;
+      color: var(--error);
+      font-size: 14px;
+      margin-bottom: 24px;
+    }
+    .error-box.active { display: block; }
+
+    /* ===== RESULT ===== */
+    .result-card {
+      display: none;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      margin-bottom: 32px;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+    }
+    .result-card.active { display: block; }
+
+    .result-header {
+      background: var(--primary);
+      color: #fff;
+      padding: 14px 22px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .result-header span { font-size: 14px; font-weight: 700; }
+    .btn-copy {
+      background: rgba(255,255,255,0.15);
+      border: 1px solid rgba(255,255,255,0.3);
+      color: #fff;
+      padding: 6px 14px;
+      border-radius: 6px;
+      font-size: 12px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .btn-copy:hover { background: rgba(255,255,255,0.25); }
+
+    .result-body {
+      padding: 28px 32px;
+      font-size: 14px;
+      line-height: 1.8;
+    }
+
+    /* Markdown スタイル */
+    .result-body h3 { font-size: 18px; margin-bottom: 16px; color: var(--primary); }
+    .result-body h4 { font-size: 15px; margin: 20px 0 10px; }
+    .result-body h4:first-of-type { margin-top: 0; }
+    .result-body ul { padding-left: 20px; }
+    .result-body li { margin-bottom: 8px; }
+    .result-body strong { color: var(--text); }
+    .result-body p { margin-bottom: 10px; }
+    .result-body hr { border: none; border-top: 1px solid var(--border); margin: 20px 0; }
+
+    /* エラーセクション強調 */
+    .result-body h4:has(+ ul li),
+    .result-section-error h4 { color: var(--error); }
+    .result-section-ok h4 { color: var(--ok); }
+
+    /* 🔴 🟢 カラー */
+    .result-body h4:first-child { color: var(--text); }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="logo">🏠</div>
+  <h1>建具図面チェッカー</h1>
+  <span>AI自動照合システム</span>
+</header>
+
+<main>
+
+  <div class="intro">
+    <strong>使い方：</strong>
+    1階・2階の建具スケジュール表を画像（PNG/JPG）でアップロードし、「読み取り確認」で内容を確認してから「チェック開始」を押してください。
+    不一致・記載漏れ・エラー値などを自動検出してレポートを出力します。
+  </div>
+
+  <!-- 非表示のAPIキー入力（api_key.txtから自動読み込みのため不要だが後方互換のため残す） -->
+  <input type="hidden" id="input-api-key" />
+
+  <!-- ファイル入力（カード外に置くことで二重クリック問題を回避） -->
+  <input type="file" id="file-mokuko-1f" accept=".png,.jpg,.jpeg" style="display:none" />
+  <input type="file" id="file-mokuko-2f" accept=".png,.jpg,.jpeg" style="display:none" />
+  <input type="file" id="file-tategu" accept=".pdf" style="display:none" />
+  <input type="file" id="file-ref" accept=".pdf" style="display:none" />
+
+  <!-- アップロードゾーン（必須2枚） -->
+  <div class="upload-grid">
+    <div id="mokuko-wrap">
+      <!-- 画像モード（1階・2階） -->
+      <div id="card-mokuko-images" style="display:block; background:var(--card); border:2px solid var(--accent); border-radius:var(--radius); padding:16px;">
+        <div style="font-size:13px; font-weight:700; color:var(--primary); margin-bottom:10px;">🏠 木工事図面（建具スケジュール表）</div>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:10px;">
+          <!-- 1階 -->
+          <div class="upload-card required" id="card-mokuko-1f" style="padding:14px 10px; cursor:pointer;" onclick="document.getElementById('file-mokuko-1f').click()">
+            <div class="icon" style="font-size:26px;">1F</div>
+            <div class="label" style="font-size:12px;">1階 建具スケジュール</div>
+            <div class="filename" id="name-mokuko-1f" style="font-size:11px;">画像を選択（PNG/JPG）</div>
+          </div>
+          <!-- 2階 -->
+          <div class="upload-card required" id="card-mokuko-2f" style="padding:14px 10px; cursor:pointer;" onclick="document.getElementById('file-mokuko-2f').click()">
+            <div class="icon" style="font-size:26px;">2F</div>
+            <div class="label" style="font-size:12px;">2階 建具スケジュール</div>
+            <div class="filename" id="name-mokuko-2f" style="font-size:11px;">画像を選択（PNG/JPG）</div>
+          </div>
+        </div>
+        <!-- OCR確認ボタン -->
+        <button type="button" id="btn-preview-ocr" disabled onclick="previewOcr()"
+          style="width:100%;padding:8px;background:var(--primary);color:#fff;border:none;border-radius:6px;font-size:13px;cursor:pointer;opacity:0.5;transition:opacity 0.2s;">
+          🔍 読み取り確認（OCRプレビュー）
+        </button>
+        <!-- プレビューパネル -->
+        <div id="ocr-preview-panel" style="display:none; margin-top:12px; background:#f8f9fa; border:1px solid var(--border); border-radius:6px; padding:12px;">
+          <div style="font-size:12px; font-weight:700; color:var(--primary); margin-bottom:6px;">📋 読み取り結果（確認してください）</div>
+          <pre id="ocr-preview-text" style="font-size:11px; font-family:monospace; white-space:pre-wrap; max-height:180px; overflow-y:auto; background:#fff; border:1px solid var(--border); border-radius:4px; padding:8px; margin-bottom:8px;"></pre>
+          <div style="font-size:11px; color:var(--muted);">※ 内容が正しければそのまま「チェック開始」を押してください。修正が必要な場合は下の「手動で修正」を使ってください。</div>
+        </div>
+      </div>
+      <!-- 手動入力モード -->
+      <div id="card-mokuko-manual" style="display:none; background:var(--card); border:2px solid var(--accent); border-radius:var(--radius); padding:20px;">
+        <div style="font-size:14px; font-weight:700; color:var(--primary); margin-bottom:8px;">📝 木工事図面 — 手動入力</div>
+        <div style="font-size:12px; color:var(--muted); margin-bottom:10px;">
+          以下のいずれかの形式で貼り付けてください（1行に複数WD可）:<br>
+          <code>WD101&nbsp;&nbsp;WD102&nbsp;&nbsp;WD103</code><br>
+          <code>片開きドア&nbsp;片開きドア&nbsp;片引戸</code><br>
+          <code>W654&nbsp;&nbsp;&nbsp;W778&nbsp;&nbsp;&nbsp;W1155</code><br>
+          <code>H2035&nbsp;&nbsp;H2035&nbsp;&nbsp;H1961</code>
+        </div>
+        <textarea id="mokuko-manual-text" rows="8"
+          style="width:100%;font-size:12px;font-family:monospace;border:1px solid var(--border);border-radius:6px;padding:8px;resize:vertical;"
+          placeholder="ここにWDデータを貼り付け..."></textarea>
+      </div>
+      <!-- 切替ボタン -->
+      <div style="text-align:right; margin-top:6px;">
+        <button type="button" id="toggle-mokuko-mode"
+          style="background:none;border:none;color:var(--accent);font-size:12px;cursor:pointer;text-decoration:underline;"
+          onclick="toggleMokukoMode()">✏️ 画像が読めない場合は手動入力へ切替</button>
+      </div>
+    </div>
+
+    <div class="upload-card required" id="card-tategu" onclick="document.getElementById('file-tategu').click()">
+      <div class="icon">📐</div>
+      <div class="label">建具・床図面</div>
+      <div class="sublabel">平面図・建具リスト・床材リスト（PDF）</div>
+      <div class="filename" id="name-tategu">ファイルを選択またはドロップ</div>
+    </div>
+  </div>
+
+  <!-- 任意：参照資料 -->
+  <div class="upload-optional" id="card-ref" onclick="document.getElementById('file-ref').click()">
+    <div class="icon">📋</div>
+    <div>
+      <div class="label">参照資料（任意）— テイスト規定・内外装チェック項目</div>
+      <div class="sublabel">楓工務店 テイスト規定や内外装チェック項目PDFがあればアップロード（テイスト整合性チェックに使用）</div>
+      <div class="filename" id="name-ref">選択しない場合、テイストチェックは「目視確認が必要」となります</div>
+    </div>
+  </div>
+
+  <button class="btn-check" id="btn-check" disabled onclick="startCheck()">
+    🔍 チェック開始
+  </button>
+
+  <!-- プログレス -->
+  <div class="progress-wrap" id="progress">
+    <div class="progress-label">
+      <span class="spinner"></span>
+      <span id="progress-text">PDFを解析中... しばらくお待ちください</span>
+    </div>
+    <div class="progress-bar-track">
+      <div class="progress-bar" id="progress-bar"></div>
+    </div>
+  </div>
+
+  <!-- エラー表示 -->
+  <div class="error-box" id="error-box"></div>
+
+  <!-- 結果 -->
+  <div class="result-card" id="result-card">
+    <div class="result-header">
+      <span>📋 チェックレポート</span>
+      <button class="btn-copy" onclick="copyReport()">コピー</button>
+    </div>
+    <div class="result-body" id="result-body"></div>
+  </div>
+
+</main>
+
+<script>
+  // ===== ファイル選択ハンドラ =====
+  function setupFileInput(inputId, cardId, nameId, allowedTypes) {
+    const input = document.getElementById(inputId);
+    const card = document.getElementById(cardId);
+    const nameEl = document.getElementById(nameId);
+
+    input.addEventListener("change", () => {
+      if (input.files.length > 0) {
+        nameEl.textContent = input.files[0].name;
+        card.classList.add("has-file");
+      } else {
+        nameEl.textContent = inputId === "file-ref"
+          ? "選択しない場合、テイストチェックは「目視確認が必要」となります"
+          : (inputId.startsWith("file-mokuko") ? "画像を選択（PNG/JPG）" : "ファイルを選択またはドロップ");
+        card.classList.remove("has-file");
+      }
+      updateButton();
+    });
+
+    // ドラッグ&ドロップ
+    card.addEventListener("dragover", e => { e.preventDefault(); card.classList.add("drag-over"); });
+    card.addEventListener("dragleave", () => card.classList.remove("drag-over"));
+    card.addEventListener("drop", e => {
+      e.preventDefault();
+      card.classList.remove("drag-over");
+      const file = e.dataTransfer.files[0];
+      if (file && (allowedTypes.includes(file.type) || file.name.match(/\.(pdf|png|jpe?g)$/i))) {
+        const dt = new DataTransfer();
+        dt.items.add(file);
+        input.files = dt.files;
+        input.dispatchEvent(new Event("change"));
+      }
+    });
+  }
+
+  const imgTypes = ["image/png", "image/jpeg"];
+  const pdfTypes = ["application/pdf"];
+  setupFileInput("file-mokuko-1f", "card-mokuko-1f", "name-mokuko-1f", imgTypes);
+  setupFileInput("file-mokuko-2f", "card-mokuko-2f", "name-mokuko-2f", imgTypes);
+  setupFileInput("file-tategu",    "card-tategu",    "name-tategu",    pdfTypes);
+  setupFileInput("file-ref",       "card-ref",       "name-ref",       pdfTypes);
+
+  function updateButton() {
+    const f1 = document.getElementById("file-mokuko-1f").files[0];
+    const f2 = document.getElementById("file-mokuko-2f").files[0];
+    const t  = document.getElementById("file-tategu").files[0];
+    const manual = document.getElementById("mokuko-manual-text").value.trim();
+    const mokukoOk = mokukoManualMode ? manual.length > 0 : (f1 || f2);
+
+    // OCRプレビューボタン: 1枚以上画像があれば有効
+    const btnPrev = document.getElementById("btn-preview-ocr");
+    btnPrev.disabled = !(f1 || f2);
+    btnPrev.style.opacity = (f1 || f2) ? "1" : "0.5";
+    btnPrev.style.cursor  = (f1 || f2) ? "pointer" : "not-allowed";
+
+    document.getElementById("btn-check").disabled = !(mokukoOk && t);
+  }
+
+  document.getElementById("mokuko-manual-text").addEventListener("input", updateButton);
+
+  // ===== プログレスバーアニメーション =====
+  let progressTimer = null;
+  function startProgress() {
+    const bar = document.getElementById("progress-bar");
+    const text = document.getElementById("progress-text");
+    bar.style.width = "0%";
+    document.getElementById("progress").classList.add("active");
+
+    const messages = [
+      "PDFを読み込み中...",
+      "図面テキストを抽出中...",
+      "画像をレンダリング中...",
+      "AIが図面を照合中... しばらくお待ちください",
+      "建具番号を突き合わせ中...",
+      "床の張り方向を確認中...",
+      "レポートを生成中...",
+    ];
+    let step = 0;
+    const maxWidth = 92;
+    let width = 0;
+
+    progressTimer = setInterval(() => {
+      width = Math.min(width + (Math.random() * 3 + 0.5), maxWidth);
+      bar.style.width = width + "%";
+      if (step < messages.length - 1 && width > (step + 1) * (maxWidth / messages.length)) {
+        step++;
+        text.textContent = messages[step];
+      }
+    }, 400);
+  }
+
+  function stopProgress() {
+    clearInterval(progressTimer);
+    const bar = document.getElementById("progress-bar");
+    bar.style.width = "100%";
+    setTimeout(() => {
+      document.getElementById("progress").classList.remove("active");
+    }, 600);
+  }
+
+  // ===== OCRプレビュー =====
+  async function previewOcr() {
+    const f1 = document.getElementById("file-mokuko-1f").files[0];
+    const f2 = document.getElementById("file-mokuko-2f").files[0];
+    if (!f1 && !f2) { showError("1階か2階の画像を選択してください。"); return; }
+
+    const btn = document.getElementById("btn-preview-ocr");
+    btn.disabled = true;
+    btn.textContent = "⏳ 読み取り中...";
+
+    const apiKey = document.getElementById("input-api-key").value.trim();
+    const fd = new FormData();
+    if (f1) fd.append("floor1", f1);
+    if (f2) fd.append("floor2", f2);
+    if (apiKey) fd.append("api_key", apiKey);
+
+    try {
+      const res = await fetch("/preview-ocr", { method: "POST", body: fd });
+      const data = await res.json();
+      if (data.error) {
+        showError("OCRエラー: " + data.error);
+      } else {
+        const panel = document.getElementById("ocr-preview-panel");
+        const pre = document.getElementById("ocr-preview-text");
+        pre.textContent = data.parsed_lines.join("\n") || "（読み取れませんでした）";
+        panel.style.display = "block";
+      }
+    } catch (err) {
+      showError("通信エラー: " + err.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "🔍 読み取り確認（OCRプレビュー）";
+      updateButton();
+    }
+  }
+
+  // ===== チェック実行 =====
+  let mokukoManualMode = false;
+
+  function toggleMokukoMode() {
+    mokukoManualMode = !mokukoManualMode;
+    document.getElementById("card-mokuko-images").style.display = mokukoManualMode ? "none" : "block";
+    document.getElementById("card-mokuko-manual").style.display = mokukoManualMode ? "block" : "none";
+    document.getElementById("toggle-mokuko-mode").textContent =
+      mokukoManualMode ? "🖼️ 画像アップロードに戻す" : "✏️ 画像が読めない場合は手動入力へ切替";
+    updateButton();
+  }
+
+  async function startCheck() {
+    const f1 = document.getElementById("file-mokuko-1f").files[0];
+    const f2 = document.getElementById("file-mokuko-2f").files[0];
+    const mokukoManual = document.getElementById("mokuko-manual-text").value.trim();
+    const tategu = document.getElementById("file-tategu").files[0];
+    const ref = document.getElementById("file-ref").files[0];
+
+    if (!mokukoManualMode && !f1 && !f2) { showError("1階か2階の建具スケジュール画像を選択してください。"); return; }
+    if (mokukoManualMode && !mokukoManual) { showError("WDデータを入力してください。"); return; }
+
+    document.getElementById("btn-check").disabled = true;
+    document.getElementById("error-box").classList.remove("active");
+    document.getElementById("result-card").classList.remove("active");
+
+    startProgress();
+
+    const apiKey = document.getElementById("input-api-key").value.trim();
+
+    const formData = new FormData();
+    if (mokukoManualMode) {
+      formData.append("mokuko_manual", mokukoManual);
+    } else {
+      if (f1) formData.append("floor1", f1);
+      if (f2) formData.append("floor2", f2);
+    }
+    formData.append("tategu", tategu);
+    if (ref) formData.append("reference", ref);
+    if (apiKey) formData.append("api_key", apiKey);
+
+    try {
+      const res = await fetch("/check", { method: "POST", body: formData });
+      const data = await res.json();
+
+      stopProgress();
+
+      if (data.error) {
+        showError(data.error + (data.trace ? "\n\n" + data.trace : ""));
+      } else {
+        showReport(data.report, data);
+      }
+    } catch (err) {
+      stopProgress();
+      showError("通信エラーが発生しました: " + err.message);
+    } finally {
+      document.getElementById("btn-check").disabled = false;
+    }
+  }
+
+  function showError(msg) {
+    const box = document.getElementById("error-box");
+    box.textContent = "⚠️ " + msg;
+    box.classList.add("active");
+  }
+
+  function showReport(markdown, extras) {
+    const body = document.getElementById("result-body");
+    let html = marked.parse(markdown);
+
+    // テーブル取得失敗時はraw textも表示
+    // OCR使用バッジ
+    if (extras && extras.ocr_used) {
+      html = `<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:10px 14px;margin-bottom:16px;font-size:13px;">
+        🔍 <strong>木工事図面はOCRで読み取りました</strong>（CIDフォントPDFのため）。
+        認識精度に限りがあるため、照合結果は目視でもご確認ください。
+      </div>` + html;
+    }
+
+    // 木工事図面が読めていない場合の案内
+    if (extras && extras.mokuko_empty) {
+      html = `<div style="background:#fdf0ef;border:1px solid #e8b4b0;border-left:4px solid #c0392b;border-radius:6px;padding:14px 18px;margin-bottom:16px;font-size:13px;">
+        ⚠️ <strong>木工事図面のWDデータを自動読取できませんでした。</strong><br>
+        下の「✏️ 手動入力へ切替」ボタンを押して、WD番号・種類・W・H寸法を貼り付けてください。<br>
+        <span style="color:#7f8c8d;margin-top:6px;display:block">例: 「WD101　片開きドア　W654　H2035」をExcelからそのままコピー&amp;ペーストできます。</span>
+      </div>` + html;
+      // 自動で手動入力に切替
+      if (!mokukoManualMode) toggleMokukoMode();
+    }
+
+    // 建具仕様サマリー
+    if (extras && extras.spec_md) {
+      html += `<hr><details open><summary style="cursor:pointer;color:#1a3a5c;font-size:13px;font-weight:700;">▶ 建具仕様・床仕様（自動抽出結果）</summary>`;
+      html += `<div style="overflow-x:auto;margin-top:8px">${marked.parse(extras.spec_md)}</div>`;
+      html += `</details>`;
+    }
+
+    // 抽出データ一覧
+    if (extras && extras.summary) {
+      html += `<hr><details><summary style="cursor:pointer;color:#1a3a5c;font-size:13px;font-weight:700;">▶ 建具・床図面 抽出データ一覧（照合確認用）</summary>`;
+      html += `<div style="overflow-x:auto;margin-top:8px">${marked.parse(extras.summary)}</div>`;
+      html += `</details>`;
+    }
+
+    // Claude OCR生テキスト（デバッグ用）— ocr_usedならセクション必ず表示
+    if (extras && extras.ocr_used) {
+      const rawText = extras.claude_raw || '（Claude生テキストが取得できませんでした）';
+      html += `<hr><details open><summary style="cursor:pointer;color:#e8a020;font-size:13px;font-weight:700;">▶ 木工事図面 Claude読み取り結果（生テキスト）</summary>`;
+      html += `<pre style="font-size:12px;background:#fffdf0;border:1px solid #ffc;padding:12px;border-radius:6px;overflow:auto;white-space:pre-wrap;margin-top:8px">${escHtml(rawText)}</pre>`;
+      html += `</details>`;
+    }
+
+    if (extras && (extras.mokuko_text || extras.tategu_text)) {
+      html += `<hr><details><summary style="cursor:pointer;color:#7f8c8d;font-size:13px;">▶ 抽出テキスト（参考）</summary>`;
+      if (extras.mokuko_text) {
+        html += `<h4 style="margin-top:12px">木工事図面 — 抽出テキスト</h4><pre style="font-size:11px;background:#f8f9fa;padding:12px;border-radius:6px;overflow:auto;white-space:pre-wrap">${escHtml(extras.mokuko_text)}</pre>`;
+      }
+      if (extras.tategu_text) {
+        html += `<h4 style="margin-top:12px">建具・床図面 — 抽出テキスト</h4><pre style="font-size:11px;background:#f8f9fa;padding:12px;border-radius:6px;overflow:auto;white-space:pre-wrap">${escHtml(extras.tategu_text)}</pre>`;
+      }
+      html += `</details>`;
+    }
+
+    body.innerHTML = html;
+
+    // 🔴 / 🟢 のh4に色を付ける
+    body.querySelectorAll("h4").forEach(h4 => {
+      if (h4.textContent.includes("🔴")) h4.style.color = "#c0392b";
+      else if (h4.textContent.includes("🟢")) h4.style.color = "#27ae60";
+    });
+
+    document.getElementById("result-card").classList.add("active");
+    document.getElementById("result-card").scrollIntoView({ behavior: "smooth" });
+    window._lastReport = markdown;
+  }
+
+  function escHtml(s) {
+    return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+  }
+
+  function copyReport() {
+    if (window._lastReport) {
+      navigator.clipboard.writeText(window._lastReport)
+        .then(() => {
+          const btn = document.querySelector(".btn-copy");
+          btn.textContent = "コピー済み ✓";
+          setTimeout(() => { btn.textContent = "コピー"; }, 2000);
+        });
+    }
+  }
+</script>
+
+</body>
+</html>

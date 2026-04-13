@@ -1,0 +1,9 @@
+api_key.txt
+.streamlit/secrets.toml
+__pycache__/
+*.pyc
+*.pyo
+*.log
+*.txt
+!requirements.txt
+.env
