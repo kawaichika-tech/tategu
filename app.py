@@ -97,9 +97,93 @@ def find_floor_label(text):
     return f"{m.group(1)}F" if m else None
 
 
+def _cluster_words_by_row(words, y_tolerance=10):
+    """座標付き単語リストを行ごとにグループ化して返す（y座標が近いものを同一行とみなす）"""
+    if not words:
+        return []
+    sorted_words = sorted(words, key=lambda w: (w["top"], w["x0"]))
+    rows = []
+    current_row = [sorted_words[0]]
+    for w in sorted_words[1:]:
+        if abs(w["top"] - current_row[0]["top"]) <= y_tolerance:
+            current_row.append(w)
+        else:
+            rows.append(current_row)
+            current_row = [w]
+    rows.append(current_row)
+    return rows
+
+
+def _assign_sill_with_coords(sill_row_words, group, n_wd, page_words):
+    """座標ベースで「有/無」を各WD列に割り当てる。成功した場合Trueを返す。"""
+    if not sill_row_words or not page_words:
+        return False
+    hdrs = sorted(sill_row_words, key=lambda w: w["x0"])[:n_wd]
+    col_x_centers = [(w["x0"] + w["x1"]) / 2 for w in hdrs]
+    hdr_y_bottom = max(w["bottom"] for w in hdrs)
+    sill_val_words = [
+        w for w in page_words
+        if w["text"] in ("有", "無")
+        and hdr_y_bottom < w["top"] < hdr_y_bottom + 150
+    ]
+    if not sill_val_words:
+        return False
+    for w in sill_val_words:
+        mid_x = (w["x0"] + w["x1"]) / 2
+        nearest = min(range(len(col_x_centers)), key=lambda ci: abs(col_x_centers[ci] - mid_x))
+        if nearest < n_wd and not group[nearest]["sill"]:
+            group[nearest]["sill"] = w["text"]
+    return True
+
+
+def _assign_sill_color_heuristic(val, group, n_wd):
+    """
+    「枠色は建具仕様をご確認ください」の出現回数で列インデックスを算出し、
+    PL色を対応するWD列に割り当てる。
+    例: "枠色... 枠色... PL ペール 枠色..." → PL ペールはインデックス1（WD②）
+    """
+    ANCHOR = "枠色は建具仕様をご確認ください"
+    pl_matches = list(re.finditer(r"PL\s+\S+", val))
+    if pl_matches:
+        for pm in pl_matches:
+            prefix = val[:pm.start()]
+            col_idx = prefix.count(ANCHOR) - 1
+            if col_idx < 0:
+                col_idx = 0  # アンカーなしの場合は先頭列
+            if col_idx < n_wd:
+                group[col_idx]["sill_color"] = pm.group()
+    else:
+        color_cands = re.findall(r"[^\s]{2,20}", val)
+        for ci, cc in enumerate(color_cands[:n_wd]):
+            group[ci]["sill_color"] = cc
+
+
 def parse_tategu_pdf(pdf_bytes):
     """建具・床図面 → WDエントリ辞書 (key: 'WD1_1F' など)"""
     entries = {}
+
+    try:
+        pdf_obj = pdfplumber.open(io.BytesIO(pdf_bytes))
+    except Exception:
+        pdf_obj = None
+
+    # ページ単位の座標付き単語データを事前取得
+    page_words_map = {}
+    sill_rows_map  = {}
+    if pdf_obj:
+        try:
+            for pi, pg in enumerate(pdf_obj.pages):
+                try:
+                    pw = pg.extract_words(x_tolerance=5, y_tolerance=5) or []
+                except Exception:
+                    pw = []
+                page_words_map[pi + 1] = pw
+                sill_hdrs = [w for w in pw if w["text"] == "敷居有無"]
+                sill_rows_map[pi + 1] = _cluster_words_by_row(sill_hdrs)
+        except Exception:
+            pass
+        pdf_obj.close()
+
     pages = read_pdf_text(pdf_bytes)
 
     for page_data in pages:
@@ -108,6 +192,10 @@ def parse_tategu_pdf(pdf_bytes):
         lines = text.splitlines()
 
         floor = find_floor_label(text) or f"p{pnum}"
+
+        page_words = page_words_map.get(pnum, [])
+        sill_rows  = sill_rows_map.get(pnum, [])
+        block_sill_idx = 0  # このページで何番目のWDブロックか
 
         i = 0
         while i < len(lines):
@@ -211,50 +299,58 @@ def parse_tategu_pdf(pdf_bytes):
                 if "把手デザイン" in bl and handle_hdr_idx is None:
                     handle_hdr_idx = bi
 
-            # 敷居有無
+            # 敷居有無（座標ベースで列判定、失敗時はテキストベースにフォールバック）
             if sill_hdr_idx is not None:
-                for bi in range(sill_hdr_idx + 1, min(sill_hdr_idx + 4, len(block))):
-                    val = block[bi].strip()
-                    if val and "敷居" not in val and "種類" not in val:
-                        vals = re.findall(r"有|無", val)
-                        for si, sv in enumerate(vals):
-                            if si < n_wd:
-                                group[si]["sill"] = sv
-                        break
+                sill_row_for_block = sill_rows[block_sill_idx] if block_sill_idx < len(sill_rows) else None
+                coord_ok = _assign_sill_with_coords(sill_row_for_block, group, n_wd, page_words)
+                if not coord_ok:
+                    for bi in range(sill_hdr_idx + 1, min(sill_hdr_idx + 4, len(block))):
+                        val = block[bi].strip()
+                        if val and "敷居" not in val and "種類" not in val:
+                            vals = re.findall(r"有|無", val)
+                            for si, sv in enumerate(vals):
+                                if si < n_wd:
+                                    group[si]["sill"] = sv
+                            break
 
-            # 敷居色
+            # 敷居色（「枠色は建具仕様をご確認ください」出現回数で列インデックスを特定）
             if sill_col_hdr_idx is not None:
                 for bi in range(sill_col_hdr_idx + 1, min(sill_col_hdr_idx + 4, len(block))):
                     val = block[bi].strip()
                     if val and "敷居" not in val:
-                        pl_colors = re.findall(r"PL\s+\S+", val)
-                        for ci, pc in enumerate(pl_colors):
-                            if ci < n_wd:
-                                group[ci]["sill_color"] = pc
-                        if not pl_colors:
-                            # その他の色情報
-                            color_cands = re.findall(r"[^\s]{2,20}", val)
-                            for ci, cc in enumerate(color_cands[:n_wd]):
-                                group[ci]["sill_color"] = cc
+                        _assign_sill_color_heuristic(val, group, n_wd)
                         break
 
-            # 把手
+            # 把手（複数行に分かれていても全列分収集）
             if handle_hdr_idx is not None:
-                for bi in range(handle_hdr_idx + 1, min(handle_hdr_idx + 4, len(block))):
+                all_handles = []
+                STOP_WORDS = {"把手", "敷居", "種類", "大きさ", "品番", "備考", "建具仕様"}
+                for bi in range(handle_hdr_idx + 1, min(handle_hdr_idx + 8, len(block))):
                     val = block[bi].strip()
-                    if val and "把手" not in val and "敷居" not in val:
-                        handles = re.findall(r"[" + CIRCLE_CHARS + r"][^\s" + CIRCLE_CHARS + r"]*", val)
-                        for hi, hv in enumerate(handles):
-                            if hi < n_wd and not group[hi]["handle"]:
-                                group[hi]["handle"] = hv
-                        if not handles and val:
-                            # 最初のWDに割り当て
-                            group[0]["handle"] = val[:30]
+                    if not val:
+                        continue
+                    if any(sw in val for sw in STOP_WORDS):
+                        if all_handles:
+                            break  # 既に収集済みなら終了、まだなら次行へ
+                        continue
+                    handles = re.findall(r"[" + CIRCLE_CHARS + r"][^\s" + CIRCLE_CHARS + r"]*", val)
+                    if handles:
+                        all_handles.extend(handles)
+                    elif not all_handles:
+                        all_handles.append(val[:30])
+                    if len(all_handles) >= n_wd:
                         break
+                for hi, hv in enumerate(all_handles[:n_wd]):
+                    if not group[hi]["handle"]:
+                        group[hi]["handle"] = hv
 
-            # エントリ登録
+            # エントリ登録（種類・W・H・部屋名・品番がすべて空 → 斜線欄とみなしてスキップ）
             for wd in group:
+                if not any([wd["type"], wd["w"], wd["h"], wd["room"], wd["hinban"]]):
+                    continue
                 entries[wd["full_key"]] = wd
+
+            block_sill_idx += 1
 
     return entries
 
@@ -969,7 +1065,8 @@ def check_required_fields(tategu_entries):
             continue
         missing = []
         if not e.get("handle"):  missing.append("把手デザイン")
-        if not e.get("sill"):    missing.append("敷居有無")
+        # 敷居有無は斜線（未記入）が正常な場合があるため必須チェックから除外
+        # → check_sill / check_closet_sill で「有」の場合のみ色チェック
         if not e.get("hinban"):  missing.append("品番")
         label = f"{e['raw']}（{e.get('room','?')}）[{e.get('floor','')}]"
         if missing:
