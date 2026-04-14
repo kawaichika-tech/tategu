@@ -344,9 +344,9 @@ def parse_tategu_pdf(pdf_bytes):
                     if not group[hi]["handle"]:
                         group[hi]["handle"] = hv
 
-            # エントリ登録（種類・W・H・部屋名・品番がすべて空 → 斜線欄とみなしてスキップ）
+            # エントリ登録（種類・W・Hがすべて空 → 斜線欄とみなしてスキップ）
             for wd in group:
-                if not any([wd["type"], wd["w"], wd["h"], wd["room"], wd["hinban"]]):
+                if not any([wd["type"], wd["w"], wd["h"]]):
                     continue
                 entries[wd["full_key"]] = wd
 
@@ -1061,7 +1061,7 @@ def _check_cross_reference_inner(mokuko_entries, tategu_entries):
 def check_required_fields(tategu_entries):
     errors, ok = [], []
     for key, e in tategu_entries.items():
-        if not e.get("room") and not e.get("type") and not e.get("w") and not e.get("h") and not e.get("hinban"):
+        if not e.get("type") and not e.get("w") and not e.get("h"):
             continue
         missing = []
         if not e.get("handle"):  missing.append("把手デザイン")
@@ -1079,7 +1079,7 @@ def check_required_fields(tategu_entries):
 def check_sill(tategu_entries):
     errors, ok = [], []
     for key, e in tategu_entries.items():
-        if not e.get("room") and not e.get("type") and not e.get("w") and not e.get("h") and not e.get("hinban"):
+        if not e.get("type") and not e.get("w") and not e.get("h"):
             continue
         sill = e.get("sill", "")
         sill_color = e.get("sill_color", "")
