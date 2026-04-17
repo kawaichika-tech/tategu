@@ -1,5 +1,7 @@
 import sys
 import os
+from dotenv import load_dotenv
+load_dotenv(os.path.join(os.path.dirname(__file__), '.env'))
 os.environ["PYTHONIOENCODING"] = "utf-8"
 if hasattr(sys.stdout, 'buffer'):
     import io
@@ -27,13 +29,7 @@ app.config["MAX_CONTENT_LENGTH"] = 100 * 1024 * 1024
 
 # ─── APIキー自動読み込み ──────────────────────────────────────────────────────
 def _load_api_key():
-    """api_key.txt または環境変数 ANTHROPIC_API_KEY からキーを読み込む"""
-    key_file = os.path.join(os.path.dirname(__file__), "api_key.txt")
-    if os.path.exists(key_file):
-        with open(key_file, "r", encoding="utf-8") as f:
-            key = f.read().strip()
-            if key:
-                return key
+    """環境変数 ANTHROPIC_API_KEY からキーを読み込む"""
     return os.environ.get("ANTHROPIC_API_KEY", "")
 
 # ─── 丸囲み数字ユーティリティ ────────────────────────────────────────────────
@@ -45,6 +41,13 @@ CIRCLE_CHARS = "".join(chr(c) for c in
 )
 WD_CIRCLE_PAT = re.compile(r"WD([" + CIRCLE_CHARS + r"])")
 WD_DIGIT_PAT  = re.compile(r"WD(\d{1,3})\b")
+
+# 把手デザインのキーワード（長いものを先に並べて部分マッチを防ぐ）
+HANDLE_KEYWORDS = sorted([
+    "スクエアL", "スクエアM", "スクエアS",
+    "引手", "手掛け", "レバーハンドル", "プッシュプル", "ツマミ",
+], key=len, reverse=True)
+_HANDLE_KW_PAT = re.compile("|".join(re.escape(k) for k in HANDLE_KEYWORDS))
 
 
 def circle_to_int(ch):
@@ -270,8 +273,8 @@ def parse_tategu_pdf(pdf_bytes):
                     for si, sp in enumerate(size_sections[1:]):
                         if si >= n_wd:
                             break
-                        wm = re.search(r"W\s*(\d{3,4})", sp)
-                        hm = re.search(r"H\s*(\d{3,4}|特注)", sp)
+                        wm = re.search(r"W\s*(\d{2,4})", sp)
+                        hm = re.search(r"H\s*(\d{2,4}|特注)", sp)
                         if wm:
                             group[si]["w"] = wm.group(1)
                         elif si in pending_w:
@@ -280,10 +283,9 @@ def parse_tategu_pdf(pdf_bytes):
                             group[si]["h"] = hm.group(1)
 
                 # standalone W### (次の大きさ行と対応するケース)
-                sw = re.match(r"^\s*(W\s*\d{3,4})\s*$", bl)
+                sw = re.match(r"^\s*(W\s*\d{2,4})\s*$", bl)
                 if sw:
-                    # 最後のWDエントリに割り当て予定
-                    w_val = re.search(r"(\d{3,4})", sw.group(1)).group(1)
+                    w_val = re.search(r"(\d{2,4})", sw.group(1)).group(1)
                     pending_w[n_wd - 1] = w_val
 
             # 把手デザイン
@@ -334,6 +336,8 @@ def parse_tategu_pdf(pdf_bytes):
                             break  # 既に収集済みなら終了、まだなら次行へ
                         continue
                     handles = re.findall(r"[" + CIRCLE_CHARS + r"][^\s" + CIRCLE_CHARS + r"]*", val)
+                    if not handles:
+                        handles = _HANDLE_KW_PAT.findall(val)
                     if handles:
                         all_handles.extend(handles)
                     elif not all_handles:
@@ -1396,7 +1400,7 @@ def preview_ocr():
     if not images:
         return jsonify({"error": "画像を選択してください"}), 400
     if not api_key:
-        return jsonify({"error": "APIキーが設定されていません。api_key.txtを確認してください。"}), 400
+        return jsonify({"error": "APIキーが設定されていません。環境変数 ANTHROPIC_API_KEY を設定してください。"}), 400
 
     try:
         raw_text = ocr_images_with_claude(images, api_key)
@@ -1493,7 +1497,7 @@ def check():
                 else:
                     mokuko_entries = {}
                     ocr_used = False
-                    ocr_err = "APIキーが設定されていません。api_key.txtを確認してください。"
+                    ocr_err = "APIキーが設定されていません。環境変数 ANTHROPIC_API_KEY を設定してください。"
                     claude_raw = None
             except Exception as e:
                 mokuko_entries = {}
