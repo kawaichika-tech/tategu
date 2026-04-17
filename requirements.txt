@@ -4,3 +4,4 @@ PyMuPDF>=1.24.0
 pdfplumber>=0.11.0
 gunicorn>=22.0.0
 streamlit>=1.35.0
+python-dotenv>=1.0.0
