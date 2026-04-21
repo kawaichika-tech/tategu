@@ -1054,8 +1054,11 @@ def _check_cross_reference_inner(mokuko_entries, tategu_entries):
         if me.get("type") and te.get("type"):
             mc = get_door_category(me["type"])
             tc = get_door_category(te["type"])
+            # 折戸 ↔ 片引戸 は木工事図面でOCR誤読が起きやすいため互換扱い
+            COMPAT = {("折戸", "片引戸"), ("片引戸", "折戸")}
             type_ok = (
                 mc is not None and mc == tc          # 両方カテゴリ一致
+                or (mc, tc) in COMPAT               # 互換カテゴリ
                 or me["type"] in te["type"]          # 部分文字列一致
                 or te["type"] in me["type"]
             )
