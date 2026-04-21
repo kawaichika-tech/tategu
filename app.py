@@ -1080,9 +1080,7 @@ def check_required_fields(tategu_entries):
         if not e.get("type") and not e.get("w") and not e.get("h"):
             continue
         missing = []
-        if not e.get("handle"):  missing.append("把手デザイン")
-        # 敷居有無は斜線（未記入）が正常な場合があるため必須チェックから除外
-        # → check_sill / check_closet_sill で「有」の場合のみ色チェック
+        # 把手デザイン・敷居有無は斜線（未記入）が正常な場合があるため必須チェックから除外
         if not e.get("hinban"):  missing.append("品番")
         label = f"{e['raw']}（{e.get('room','?')}）[{e.get('floor','')}]"
         if missing:
