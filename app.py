@@ -1194,6 +1194,11 @@ def check_closet_sill(tategu_entries):
         if not any(kw in typ for kw in closet_kws):
             continue
 
+        # ノンレールタイプは敷居不要（斜線が正常）
+        if "ノンレール" in typ:
+            ok.append(f"{label} — ノンレール折戸・敷居不要 ✓")
+            continue
+
         if "両開き" in typ or "観音" in typ:
             if sill != "有":
                 errors.append(
