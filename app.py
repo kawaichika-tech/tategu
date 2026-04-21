@@ -323,18 +323,26 @@ def parse_tategu_pdf(pdf_bytes):
                         _assign_sill_color_heuristic(val, group, n_wd)
                         break
 
-            # 把手（複数行に分かれていても全列分収集）
+            # 把手（列ごとに「把手デザイン→値→STOP」が繰り返す構造にも対応）
             if handle_hdr_idx is not None:
                 all_handles = []
-                STOP_WORDS = {"把手", "敷居", "種類", "大きさ", "品番", "備考", "建具仕様"}
-                for bi in range(handle_hdr_idx + 1, min(handle_hdr_idx + 8, len(block))):
+                STOP_WORDS = {"敷居", "種類", "大きさ", "品番", "備考", "建具仕様"}
+                collecting = True  # 把手デザインヘッダー直後はTrue
+                for bi in range(handle_hdr_idx + 1, len(block)):
+                    if len(all_handles) >= n_wd:
+                        break
                     val = block[bi].strip()
                     if not val:
                         continue
+                    # 次のWD列の「把手デザイン」ヘッダー → 収集再開
+                    if "把手デザイン" in val:
+                        collecting = True
+                        continue
+                    if not collecting:
+                        continue
                     if any(sw in val for sw in STOP_WORDS):
-                        if len(all_handles) >= n_wd:
-                            break  # n_wd分揃っていれば終了
-                        continue  # まだ揃っていなければSTOP_WORDをスキップして継続
+                        collecting = False  # このWD列の把手セクション終了
+                        continue
                     handles = re.findall(r"[" + CIRCLE_CHARS + r"][^\s" + CIRCLE_CHARS + r"]*", val)
                     if not handles:
                         handles = _HANDLE_KW_PAT.findall(val)
@@ -342,8 +350,6 @@ def parse_tategu_pdf(pdf_bytes):
                         all_handles.extend(handles)
                     elif not all_handles:
                         all_handles.append(val[:30])
-                    if len(all_handles) >= n_wd:
-                        break
                 for hi, hv in enumerate(all_handles[:n_wd]):
                     if not group[hi]["handle"]:
                         group[hi]["handle"] = hv
@@ -1031,9 +1037,15 @@ def _check_cross_reference_inner(mokuko_entries, tategu_entries):
         tw = re.sub(r"[^\d]", "", te.get("w", ""))
         mh = re.sub(r"[^\d]", "", me.get("h", ""))
         th = re.sub(r"[^\d]", "", te.get("h", ""))
-        if mw and tw and mw != tw:
+        def size_match(a, b):
+            if a == b:
+                return True
+            # 一方が他方のプレフィックスの場合も一致とみなす（例: "07" == "077"）
+            n = min(len(a), len(b))
+            return a[:n] == b[:n]
+        if mw and tw and not size_match(mw, tw):
             issues.append(f"W寸法: 木工事={me['w']} ／ 建具図面={te['w']}")
-        if mh and th and mh != th:
+        if mh and th and not size_match(mh, th):
             issues.append(f"H寸法: 木工事={me['h']} ／ 建具図面={te['h']}")
 
         # ★修正: 種類はカテゴリが一致すれば合格
