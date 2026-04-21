@@ -332,9 +332,9 @@ def parse_tategu_pdf(pdf_bytes):
                     if not val:
                         continue
                     if any(sw in val for sw in STOP_WORDS):
-                        if all_handles:
-                            break  # 既に収集済みなら終了、まだなら次行へ
-                        continue
+                        if len(all_handles) >= n_wd:
+                            break  # n_wd分揃っていれば終了
+                        continue  # まだ揃っていなければSTOP_WORDをスキップして継続
                     handles = re.findall(r"[" + CIRCLE_CHARS + r"][^\s" + CIRCLE_CHARS + r"]*", val)
                     if not handles:
                         handles = _HANDLE_KW_PAT.findall(val)
