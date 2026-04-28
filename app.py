@@ -53,13 +53,13 @@ def _normalize_text(s):
         out = []
         for ch in s:
             if _is_radical_char(ch):
-                out.append(unicodedata.normalize("NFKC", ch))
+                ch = unicodedata.normalize("NFKC", ch)
             elif ch == "∕":
-                out.append("／")
-            elif ch in _VARIANT_MAP:
-                out.append(_VARIANT_MAP[ch])
-            else:
-                out.append(ch)
+                ch = "／"
+            # NFKC正規化後の文字も異体字マップに通す（例: ⼾(U+2F3E) → 戶(U+6236) → 戸(U+6238)）
+            if ch in _VARIANT_MAP:
+                ch = _VARIANT_MAP[ch]
+            out.append(ch)
         s = "".join(out)
     return s
 
@@ -207,8 +207,9 @@ def _assign_sill_color_heuristic(val, group, n_wd):
             group[ci]["sill_color"] = cc
 
 
-def parse_tategu_pdf(pdf_bytes):
-    """建具・床図面 → WDエントリ辞書 (key: 'WD1_1F' など)"""
+def _parse_tategu_pdf_pdfplumber(pdf_bytes):
+    """建具・床図面 → WDエントリ辞書 (key: 'WD1_1F' など)
+    pdfplumberによるテキストベース抽出。CIDフォントPDFでは抽出できない。"""
     entries = {}
 
     try:
@@ -408,9 +409,150 @@ def parse_tategu_pdf(pdf_bytes):
             for wd in group:
                 if not any([wd["type"], wd["w"], wd["h"]]):
                     continue
+                # 部屋名・種類・品番がいずれも空なら、列ずれの断片とみなしてスキップ
+                # （例: 3列ヘッダー WD④/WD⑤/WD⑥ で WD⑥ 列は空白だが、誤って w/h が代入されたケース）
+                if not wd.get("room") and not wd["type"] and not wd["hinban"]:
+                    continue
                 entries[wd["full_key"]] = wd
 
             block_sill_idx += 1
+
+    return entries
+
+
+# ─── 建具PDF Claude OCR フォールバック（CIDフォント対応） ────────────────────
+
+TATEGU_OCR_PROMPT = (
+    "この画像は建具スケジュール表PDFの1ページです。\n"
+    "各WD番号（WD①, WD②, WD③...）の列を画像上で垂直に追い、その列にあるデータを正確に読み取ってください。\n\n"
+    "【出力形式】1つのWD番号につき1行、パイプ「|」区切りで出力:\n"
+    "WD番号|部屋名|種類|W寸法|H寸法|品番|把手デザイン|敷居有無|敷居色\n\n"
+    "【出力例】\n"
+    "WD①|脱衣所|⑲片引戸トイレタイプ|1190|2035|B-XF CL（ナチュラルクリア）|②SH型（シルバー）|有|LE ライトグレージュ色\n"
+    "WD②|洗面所|④トイレドア|778|2035|B-XF CL（ナチュラルクリア）|②SH型（シルバー）|有|\n"
+    "WD③|||||||\n\n"
+    "【厳守ルール】\n"
+    "1. WD番号は丸囲み数字で出力（WD①, WD②, ...）。アラビア数字（WD1, WD2）は不可。\n"
+    "2. 1つのWD番号につき1行のみ。\n"
+    "3. 値が空欄／斜線／読み取れない場合は空文字（区切り「|」のみ残す）。\n"
+    "4. W・H寸法は数字のみ（W/Hの文字や単位は付けない、特注の場合は「特注」）。\n"
+    "5. 種類は丸囲み数字を含めて読み取る（例: ⑲片引戸トイレタイプ, ㊺リビングドアアウトセット上吊り引き戸）。\n"
+    "6. 敷居有無は「有」「無」のいずれか、未記入は空欄。\n"
+    "7. WDスケジュール表のみ対象。床材・ストッパー・建具仕様・備考行は出力しない。\n"
+    "8. 解説・説明は一切書かない。データ行のみ。\n"
+)
+
+
+def ocr_tategu_with_claude(pdf_bytes, api_key):
+    """建具PDFを各ページごとに Claude API で読み取り、ページ別の構造化テキストを返す。
+    戻り値: List[str] — 1要素=1ページ分のテキスト"""
+    try:
+        import anthropic
+    except ImportError:
+        raise RuntimeError("anthropic パッケージが見つかりません。`pip install anthropic` を実行してください。")
+
+    client = anthropic.Anthropic(api_key=api_key)
+    images = pdf_to_images(pdf_bytes, dpi=200)
+    page_texts = []
+    for img_bytes in images:
+        mime = "image/png"
+        if img_bytes[:3] == b"\xff\xd8\xff":
+            mime = "image/jpeg"
+        img_b64 = base64.b64encode(img_bytes).decode()
+        response = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=4096,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "image", "source": {"type": "base64", "media_type": mime, "data": img_b64}},
+                    {"type": "text", "text": TATEGU_OCR_PROMPT},
+                ],
+            }],
+        )
+        page_texts.append(response.content[0].text)
+    return page_texts
+
+
+def parse_tategu_from_claude(page_texts):
+    """Claude API出力（パイプ区切り）を parse_tategu_pdf と同じ形式の entries 辞書に変換する。"""
+    entries = {}
+    for pi, page_text in enumerate(page_texts):
+        floor = f"p{pi + 1}"
+        for raw_line in page_text.splitlines():
+            line = _normalize_text(raw_line.strip())
+            if not line or "|" not in line:
+                continue
+            m = WD_CIRCLE_PAT.search(line)
+            if not m:
+                continue
+            n = circle_to_int(m.group(1))
+            if not n:
+                continue
+
+            parts = [p.strip() for p in line.split("|")]
+            def get(idx, max_len=None):
+                if idx < len(parts):
+                    v = parts[idx]
+                    return v[:max_len] if max_len else v
+                return ""
+
+            wd_key = f"WD{n}"
+            full_key = f"{wd_key}_{floor}"
+            w_raw = get(3)
+            h_raw = get(4)
+            w_val = "特注" if "特注" in w_raw else re.sub(r"\D", "", w_raw)
+            h_val = "特注" if "特注" in h_raw else re.sub(r"\D", "", h_raw)
+
+            entry = {
+                "key": wd_key,
+                "full_key": full_key,
+                "raw": m.group(0),
+                "room": get(1, 30),
+                "floor": floor,
+                "page": pi + 1,
+                "type": get(2, 40),
+                "w": w_val,
+                "h": h_val,
+                "hinban": get(5, 50),
+                "handle": get(6, 30),
+                "sill": get(7, 4),
+                "sill_color": get(8, 30),
+            }
+
+            # 種類・W・Hがすべて空 → 斜線欄とみなしてスキップ
+            if not any([entry["type"], entry["w"], entry["h"]]):
+                continue
+            # 部屋名・種類・品番すべて空 → 列ずれ断片とみなしてスキップ
+            if not entry["room"] and not entry["type"] and not entry["hinban"]:
+                continue
+            entries[full_key] = entry
+    return entries
+
+
+def parse_tategu_pdf(pdf_bytes, api_key=None):
+    """建具・床図面 → WDエントリ辞書。
+    pdfplumberによるテキスト抽出を試み、空またはCIDフォント検出時は Claude API ビジョンOCRにフォールバック。"""
+    entries = _parse_tategu_pdf_pdfplumber(pdf_bytes)
+
+    # CIDフォント / 抽出ゼロ判定
+    pages = read_pdf_text(pdf_bytes)
+    full_text = "\n".join(p["text"] for p in pages)
+    cid_detected = is_cid_font_pdf(full_text)
+    print(f"[parse_tategu_pdf] entries_from_pdfplumber={len(entries)}, cid_detected={cid_detected}, api_key={'YES' if api_key else 'NO'}")
+
+    if (len(entries) == 0 or cid_detected) and api_key:
+        try:
+            print("[parse_tategu_pdf] Calling Claude API OCR fallback...")
+            page_texts = ocr_tategu_with_claude(pdf_bytes, api_key)
+            print(f"[parse_tategu_pdf] Claude returned {len(page_texts)} page(s)")
+            ocr_entries = parse_tategu_from_claude(page_texts)
+            print(f"[parse_tategu_pdf] Parsed entries after Claude: {list(ocr_entries.keys())}")
+            # OCR結果の方が件数が多ければOCRを採用、少なければpdfplumberを保持
+            if len(ocr_entries) >= len(entries):
+                entries = ocr_entries
+        except Exception as e:
+            print(f"[parse_tategu_pdf] Claude OCR fallback error: {e}")
 
     return entries
 
@@ -1168,14 +1310,29 @@ def check_sill(tategu_entries):
 
 def check_na(texts):
     combined = "\n".join(texts)
-    pat = re.compile(r"#N/A|#REF!|#VALUE!|#DIV/0!|#NAME\?|#NULL!", re.I)
-    found = list(set(pat.findall(combined)))
-    if found:
-        counts = {v: combined.count(v) for v in found}
-        detail = ", ".join(f"{k}（{v}箇所）" for k, v in counts.items())
-        return [f"**数式エラー値が残っています**: {detail}\n"
-                "  - ExcelでエラーをなくしてからPDF出力し直してください"]
-    return []
+    # 前後がアルファベット/数字でない時のみマッチ（PDFの表抽出で偶然連結したケースを除外）
+    pat = re.compile(
+        r"(?<![A-Za-z0-9])(#N/A|#REF!|#VALUE!|#DIV/0!|#NAME\?|#NULL!)(?![A-Za-z0-9])",
+        re.I,
+    )
+    matches = list(pat.finditer(combined))
+    if not matches:
+        return []
+    counts = {}
+    contexts = []
+    for m in matches:
+        v = m.group(1).upper()
+        counts[v] = counts.get(v, 0) + 1
+        start = max(0, m.start() - 15)
+        end   = min(len(combined), m.end() + 15)
+        ctx = combined[start:end].replace("\n", " ").strip()
+        if ctx not in contexts:
+            contexts.append(ctx)
+    detail = ", ".join(f"{k}（{v}箇所）" for k, v in counts.items())
+    ctx_str = "  - 該当箇所: " + " / ".join(f"「…{c}…」" for c in contexts[:3])
+    return [f"**数式エラー値が残っています**: {detail}\n"
+            f"{ctx_str}\n"
+            "  - ExcelでエラーをなくしてからPDF出力し直してください"]
 
 
 def check_taste(full_text, ref_text, tategu_entries):
@@ -1546,7 +1703,7 @@ def check():
 
         full_text = mokuko_text + "\n" + tategu_text
 
-        tategu_entries = parse_tategu_pdf(tategu_bytes)
+        tategu_entries = parse_tategu_pdf(tategu_bytes, api_key or None)
 
         if mokuko_manual:
             mokuko_entries = parse_mokuko_manual(mokuko_manual)

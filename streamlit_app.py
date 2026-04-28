@@ -1,6 +1,9 @@
 import streamlit as st
 import sys
 import os
+from dotenv import load_dotenv
+# override=True: シェル側に空のANTHROPIC_API_KEY等が残っていても.envの値で上書きする
+load_dotenv(os.path.join(os.path.dirname(__file__), '.env'), override=True)
 
 # ─── ページ設定（最初に呼ぶ必要がある）─────────────────────────────────────
 st.set_page_config(
@@ -35,23 +38,14 @@ from app import (
 
 
 def get_api_key() -> str:
-    """Streamlit Secrets → api_key.txt の順でAPIキーを取得する"""
+    """Streamlit Secrets → 環境変数 ANTHROPIC_API_KEY の順でAPIキーを取得する"""
     try:
         key = st.secrets.get("ANTHROPIC_API_KEY", "")
         if key:
             return key
     except Exception:
         pass
-    key_file = os.path.join(os.path.dirname(__file__), "api_key.txt")
-    if os.path.exists(key_file):
-        try:
-            with open(key_file, "r", encoding="utf-8") as f:
-                key = f.read().strip()
-                if key:
-                    return key
-        except Exception:
-            pass
-    return ""
+    return os.environ.get("ANTHROPIC_API_KEY", "")
 
 
 # ─── タイトル & 説明 ──────────────────────────────────────────────────────────
@@ -63,6 +57,16 @@ WD番号の寸法・種類・敷居・品番などの整合性を自動チェッ
 CIDフォントPDFは Claude API ビジョンで自動読み取り対応。
 """
 )
+
+# ─── APIキー状態インジケータ ──────────────────────────────────────────────────
+_initial_api_key = get_api_key()
+if _initial_api_key:
+    st.success(f"✅ Claude API キー設定済み（CIDフォントPDFも自動OCR可能）")
+else:
+    st.warning(
+        "⚠️ Claude API キーが未設定です。CIDフォント由来の建具図面PDFはOCRできません。"
+        "プロジェクトフォルダの `.env` に `ANTHROPIC_API_KEY=...` を設定して、Streamlitを再起動してください。"
+    )
 
 # ─── ファイルアップロード ─────────────────────────────────────────────────────
 st.markdown("---")
@@ -162,8 +166,46 @@ if run_btn:
             ref_pages = read_pdf_text(ref_bytes)
             ref_text = "\n".join(p["text"] for p in ref_pages)
 
-        # ── 建具エントリ解析 ──
-        tategu_entries = parse_tategu_pdf(tategu_bytes)
+        # ── 建具エントリ解析（CIDフォントPDFは Claude OCR フォールバック） ──
+        # parse_tategu_pdf 内のprint出力を捕捉してUIに表示
+        import io as _io
+        from contextlib import redirect_stdout as _rstdout
+        _parse_buf = _io.StringIO()
+        with _rstdout(_parse_buf):
+            tategu_entries = parse_tategu_pdf(tategu_bytes, api_key or None)
+        tategu_parse_log = _parse_buf.getvalue()
+
+        tategu_err = None
+        if len(tategu_entries) == 0:
+            from app import is_cid_font_pdf as _cidchk
+            _full_t = "\n".join(p["text"] for p in read_pdf_text(tategu_bytes))
+            if _cidchk(_full_t):
+                if not api_key:
+                    tategu_err = (
+                        "建具図面PDFがCIDフォント由来でテキスト抽出できません。"
+                        "Claude APIキーが未設定のためOCRも実行できませんでした。"
+                        "`.env` の `ANTHROPIC_API_KEY` を設定してください。"
+                    )
+                else:
+                    tategu_err = (
+                        "建具図面PDFがCIDフォント由来です。Claude OCRを試みましたが"
+                        "WDエントリを抽出できませんでした。"
+                    )
+            else:
+                tategu_err = (
+                    "建具図面PDFからWDエントリを1件も抽出できませんでした。"
+                    "PDFの形式や記載内容を確認してください。"
+                )
+
+        # ── 建具側パースログをUIに表示 ──
+        if tategu_parse_log.strip():
+            with st.expander("🔍 建具PDFパース詳細ログ（クリックで展開）"):
+                st.code(tategu_parse_log, language="text")
+                st.caption(
+                    "チェックポイント: `entries_from_pdfplumber` が0なら pdfplumberで読めていません。"
+                    "`cid_detected=True` ならCIDフォントPDFでOCRが必要です。"
+                    "`api_key=YES` かつ `Calling Claude API OCR fallback...` が出ればOCRが走っています。"
+                )
 
         # ── 木工事エントリ解析 ──
         mokuko_entries = {}
@@ -211,6 +253,13 @@ if run_btn:
                 f"**木工事図面の読み取りエラー**\n"
                 f"  - {ocr_err}\n"
                 f"  - 木工事図面の照合は目視確認が必要です"
+            )
+
+        if tategu_err:
+            all_errors.append(
+                f"**建具図面の読み取りエラー**\n"
+                f"  - {tategu_err}\n"
+                f"  - 建具図面側のWD情報が取れていないため、以降の照合・必須項目チェックは目視確認が必要です"
             )
 
         errs, oks = check_cross_reference(mokuko_entries, tategu_entries)
