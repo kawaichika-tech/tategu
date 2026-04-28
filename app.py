@@ -457,6 +457,8 @@ TATEGU_OCR_PROMPT = (
     "2. WD行は必ず9フィールド（8個の「|」）。最後の敷居色まで省略しない。\n"
     "3. 値が空欄／斜線／読み取れない場合は空文字（区切り「|」のみ残す）。\n"
     "4. W・H寸法は数字のみ（W/Hの文字や単位は付けない。特注の場合は「特注」）。\n"
+    "   ※「---」「ーー」「—」「‐‐」のような横線・ハイフンの並びは「特注」の意味なので、\n"
+    "     必ず文字列「特注」として出力すること。「---」と出力するのは禁止。\n"
     "5. 種類は丸囲み数字を含めて読み取る（例: ⑲片引戸トイレタイプ）。\n"
     "6. 敷居有無は「有」「無」のいずれか、未記入は空欄。\n"
     "7. 敷居色は「LE ライトグレージュ色」「DK ダークブラウン」のような色名。\n"
@@ -573,8 +575,18 @@ def parse_tategu_from_claude(page_texts):
             full_key = f"{wd_key}_{floor}"
             w_raw = get(3)
             h_raw = get(4)
-            w_val = "特注" if "特注" in w_raw else re.sub(r"\D", "", w_raw)
-            h_val = "特注" if "特注" in h_raw else re.sub(r"\D", "", h_raw)
+            # 横線・ハイフンの並び（---、ーー、—、‐‐ 等）は「特注」の意味として扱う
+            _DASH_ONLY = re.compile(r"^[\-ー―—‐−–\s]+$")
+            def _normalize_size(raw):
+                if not raw:
+                    return ""
+                if "特注" in raw:
+                    return "特注"
+                if _DASH_ONLY.match(raw):
+                    return "特注"
+                return re.sub(r"\D", "", raw)
+            w_val = _normalize_size(w_raw)
+            h_val = _normalize_size(h_raw)
 
             entry = {
                 "key": wd_key,
