@@ -424,22 +424,46 @@ def _parse_tategu_pdf_pdfplumber(pdf_bytes):
 
 TATEGU_OCR_PROMPT = (
     "この画像は建具スケジュール表PDFの1ページです。\n"
-    "各WD番号（WD①, WD②, WD③...）の列を画像上で垂直に追い、その列にあるデータを正確に読み取ってください。\n\n"
-    "【出力形式】1つのWD番号につき1行、パイプ「|」区切りで出力:\n"
-    "WD番号|部屋名|種類|W寸法|H寸法|品番|把手デザイン|敷居有無|敷居色\n\n"
-    "【出力例】\n"
+    "以下の【1】WD一覧 と 【2】建具仕様 の両方を抽出してください。\n\n"
+    "==========================================\n"
+    "【1】WD一覧（パイプ区切り、9フィールド固定）\n"
+    "==========================================\n"
+    "各WD番号（WD①, WD②, ...）の列を画像上で垂直に追い、9個のフィールドをパイプ「|」で区切って出力します。\n"
+    "必ず「8個の|」を含む行になります（フィールド数=9）。空欄でも区切りは残すこと。\n\n"
+    "形式: WD番号|部屋名|種類|W寸法|H寸法|品番|把手デザイン|敷居有無|敷居色\n\n"
+    "出力例（敷居色は最後のフィールド、必ず読み取ること）:\n"
     "WD①|脱衣所|⑲片引戸トイレタイプ|1190|2035|B-XF CL（ナチュラルクリア）|②SH型（シルバー）|有|LE ライトグレージュ色\n"
-    "WD②|洗面所|④トイレドア|778|2035|B-XF CL（ナチュラルクリア）|②SH型（シルバー）|有|\n"
-    "WD③|||||||\n\n"
+    "WD②|洗面所|④トイレドア|778|2035|B-XF CL（ナチュラルクリア）|②SH型（シルバー）|有|LE ライトグレージュ色\n"
+    "WD③|和室収納|⑲片引戸|1324|2035|B-XF CL（ナチュラルクリア）||無|\n"
+    "WD④||||||||  ← 全空欄でも8個の「|」を残すこと\n\n"
+    "==========================================\n"
+    "【2】建具仕様（SPEC:項目|値 形式）\n"
+    "==========================================\n"
+    "「建具仕様」「床仕様」セクションから以下の項目を抽出。読み取れた項目のみ出力（空欄項目は省略可）。\n\n"
+    "SPEC:ドア色|（基本のドア色）\n"
+    "SPEC:ドア色（一部変更）|（※一部変更の場合の色、丸囲み数字も含む）\n"
+    "SPEC:ストッパー色|（色）\n"
+    "SPEC:キャッチャー色|（色）\n"
+    "SPEC:枠色|（基本の枠色）\n"
+    "SPEC:枠色（一部変更）|（※一部変更の場合の色）\n"
+    "SPEC:ハンドル色|（色）\n"
+    "SPEC:床の張り方向|（注記文 例: 見切りあり/フロア種類変わる為）\n"
+    "SPEC:床材|（メーカー・厚み・種類 例: ウッドワン 12mm 無垢フローリング2P）\n"
+    "SPEC:床コード|（型番 例: FKK224D-JG）\n\n"
+    "==========================================\n"
     "【厳守ルール】\n"
-    "1. WD番号は丸囲み数字で出力（WD①, WD②, ...）。アラビア数字（WD1, WD2）は不可。\n"
-    "2. 1つのWD番号につき1行のみ。\n"
+    "==========================================\n"
+    "1. WD行は必ず「WD」+ 丸囲み数字（WD①, WD②, ...）で開始。アラビア数字（WD1）は不可。\n"
+    "2. WD行は必ず9フィールド（8個の「|」）。最後の敷居色まで省略しない。\n"
     "3. 値が空欄／斜線／読み取れない場合は空文字（区切り「|」のみ残す）。\n"
-    "4. W・H寸法は数字のみ（W/Hの文字や単位は付けない、特注の場合は「特注」）。\n"
-    "5. 種類は丸囲み数字を含めて読み取る（例: ⑲片引戸トイレタイプ, ㊺リビングドアアウトセット上吊り引き戸）。\n"
+    "4. W・H寸法は数字のみ（W/Hの文字や単位は付けない。特注の場合は「特注」）。\n"
+    "5. 種類は丸囲み数字を含めて読み取る（例: ⑲片引戸トイレタイプ）。\n"
     "6. 敷居有無は「有」「無」のいずれか、未記入は空欄。\n"
-    "7. WDスケジュール表のみ対象。床材・ストッパー・建具仕様・備考行は出力しない。\n"
-    "8. 解説・説明は一切書かない。データ行のみ。\n"
+    "7. 敷居色は「LE ライトグレージュ色」「DK ダークブラウン」のような色名。\n"
+    "   「枠色は建具仕様をご確認ください」と書かれている場合は空欄。\n"
+    "8. SPEC行は必ず「SPEC:」で開始。\n"
+    "9. 解説・説明文は一切書かない。WD行 と SPEC行 のみ。\n"
+    "10. 床材・備考・畳タイプ・畳色など、上記以外の行は出力しない。\n"
 )
 
 
@@ -475,14 +499,51 @@ def ocr_tategu_with_claude(pdf_bytes, api_key):
 
 
 def parse_tategu_from_claude(page_texts):
-    """Claude API出力（パイプ区切り）を parse_tategu_pdf と同じ形式の entries 辞書に変換する。"""
+    """Claude API出力をパースし、entries辞書 と spec辞書 のタプルを返す。
+    - WD行: 'WD①|部屋|種類|W|H|品番|把手|敷居|敷居色'
+    - SPEC行: 'SPEC:項目|値'
+    戻り値: (entries: dict, spec: dict)"""
     entries = {}
+    spec = {
+        "door_color": "", "door_color_exc": "",
+        "stopper_color": "", "catcher_color": "",
+        "frame_color": "", "frame_color_exc": "",
+        "handle_color": "",
+        "floor_direction": "",
+        "floor_material": "", "floor_code": "",
+    }
+    SPEC_KEY_MAP = {
+        "ドア色": "door_color",
+        "ドア色（一部変更）": "door_color_exc",
+        "ストッパー色": "stopper_color",
+        "キャッチャー色": "catcher_color",
+        "枠色": "frame_color",
+        "枠色（一部変更）": "frame_color_exc",
+        "ハンドル色": "handle_color",
+        "床の張り方向": "floor_direction",
+        "床材": "floor_material",
+        "床コード": "floor_code",
+    }
+
     for pi, page_text in enumerate(page_texts):
         floor = f"p{pi + 1}"
         for raw_line in page_text.splitlines():
             line = _normalize_text(raw_line.strip())
             if not line or "|" not in line:
                 continue
+
+            # SPEC行
+            if line.startswith("SPEC:"):
+                body = line[len("SPEC:"):]
+                key, sep, val = body.partition("|")
+                key = key.strip()
+                val = val.strip()
+                target = SPEC_KEY_MAP.get(key)
+                if target and val and not spec[target]:
+                    spec[target] = val[:80]
+                continue
+
+            # WD行
             m = WD_CIRCLE_PAT.search(line)
             if not m:
                 continue
@@ -527,13 +588,16 @@ def parse_tategu_from_claude(page_texts):
             if not entry["room"] and not entry["type"] and not entry["hinban"]:
                 continue
             entries[full_key] = entry
-    return entries
+    return entries, spec
 
 
 def parse_tategu_pdf(pdf_bytes, api_key=None):
-    """建具・床図面 → WDエントリ辞書。
-    pdfplumberによるテキスト抽出を試み、空またはCIDフォント検出時は Claude API ビジョンOCRにフォールバック。"""
+    """建具・床図面 → (entriesDict, ocrSpecDict or None) のタプル。
+    pdfplumberによるテキスト抽出を試み、空またはCIDフォント検出時は Claude API ビジョンOCRにフォールバック。
+    OCRが使われた場合は spec_dict も併せて返す（建具仕様セクション抽出用）。
+    OCRが使われなかった場合は spec_dict は None（呼び出し側で parse_building_spec を従来どおり使用）。"""
     entries = _parse_tategu_pdf_pdfplumber(pdf_bytes)
+    ocr_spec = None
 
     # CIDフォント / 抽出ゼロ判定
     pages = read_pdf_text(pdf_bytes)
@@ -546,15 +610,17 @@ def parse_tategu_pdf(pdf_bytes, api_key=None):
             print("[parse_tategu_pdf] Calling Claude API OCR fallback...")
             page_texts = ocr_tategu_with_claude(pdf_bytes, api_key)
             print(f"[parse_tategu_pdf] Claude returned {len(page_texts)} page(s)")
-            ocr_entries = parse_tategu_from_claude(page_texts)
+            ocr_entries, ocr_spec_extracted = parse_tategu_from_claude(page_texts)
             print(f"[parse_tategu_pdf] Parsed entries after Claude: {list(ocr_entries.keys())}")
-            # OCR結果の方が件数が多ければOCRを採用、少なければpdfplumberを保持
+            print(f"[parse_tategu_pdf] Parsed spec keys with values: {[k for k,v in ocr_spec_extracted.items() if v]}")
+            # OCR結果の方が件数が多ければOCRを採用
             if len(ocr_entries) >= len(entries):
                 entries = ocr_entries
+                ocr_spec = ocr_spec_extracted
         except Exception as e:
             print(f"[parse_tategu_pdf] Claude OCR fallback error: {e}")
 
-    return entries
+    return entries, ocr_spec
 
 
 # ─── OCR（CIDフォントPDF対応） ──────────────────────────────────────────────
@@ -1703,7 +1769,7 @@ def check():
 
         full_text = mokuko_text + "\n" + tategu_text
 
-        tategu_entries = parse_tategu_pdf(tategu_bytes, api_key or None)
+        tategu_entries, tategu_ocr_spec = parse_tategu_pdf(tategu_bytes, api_key or None)
 
         if mokuko_manual:
             mokuko_entries = parse_mokuko_manual(mokuko_manual)
@@ -1763,7 +1829,8 @@ def check():
         errs, oks = check_taste(full_text, ref_text, tategu_entries)
         all_errors.extend(errs); all_ok.extend(oks)
 
-        bldg_spec = parse_building_spec(tategu_text)
+        # OCRが走っていればOCR抽出のspecを優先、無ければpdfplumberテキストからパース
+        bldg_spec = tategu_ocr_spec if tategu_ocr_spec else parse_building_spec(tategu_text)
         errs, oks = check_building_spec(bldg_spec)
         all_errors.extend(errs)
         all_ok.extend(oks)

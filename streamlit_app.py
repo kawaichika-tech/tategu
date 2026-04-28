@@ -172,7 +172,7 @@ if run_btn:
         from contextlib import redirect_stdout as _rstdout
         _parse_buf = _io.StringIO()
         with _rstdout(_parse_buf):
-            tategu_entries = parse_tategu_pdf(tategu_bytes, api_key or None)
+            tategu_entries, tategu_ocr_spec = parse_tategu_pdf(tategu_bytes, api_key or None)
         tategu_parse_log = _parse_buf.getvalue()
 
         tategu_err = None
@@ -281,7 +281,8 @@ if run_btn:
         all_errors.extend(errs)
         all_ok.extend(oks)
 
-        bldg_spec = parse_building_spec(tategu_text)
+        # OCRが走っていればOCR抽出のspecを優先、無ければpdfplumberテキストからパース
+        bldg_spec = tategu_ocr_spec if tategu_ocr_spec else parse_building_spec(tategu_text)
         errs, oks = check_building_spec(bldg_spec)
         all_errors.extend(errs)
         all_ok.extend(oks)
