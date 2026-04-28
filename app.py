@@ -35,19 +35,29 @@ def _is_radical_char(ch):
     return (0x2F00 <= c <= 0x2FD5) or (0x2E80 <= c <= 0x2EF3)
 
 
+# 部首文字ではない（NFKCで吸収されない）異体字／旧字体の対応表。
+# 建具図面で観測された/観測されそうな差異のみ追加する。
+_VARIANT_MAP = {
+    "戶": "戸",  # U+6236 (旧字体・繁体字) → U+6238 (日本標準)
+    "户": "戸",  # U+6237 (簡体字)         → U+6238
+}
+
+
 def _normalize_text(s):
-    """CIDフォント由来で部首文字に化けたものを通常字へ戻す。
-    例: 敷居⾊∕種類 → 敷居色／種類。
-    NFKC全体は丸囲み数字（①→1）を壊すので、部首文字だけ選択的に正規化。"""
+    """CIDフォント由来の部首文字や旧字体／異体字を通常字へ戻す。
+    例: 敷居⾊∕種類 → 敷居色／種類、片引戶 → 片引戸。
+    NFKC全体は丸囲み数字（①→1）を壊すので、部首文字＋既知の異体字だけ選択的に正規化。"""
     if not s:
         return s
-    if any(_is_radical_char(ch) for ch in s) or "∕" in s:
+    if any(_is_radical_char(ch) for ch in s) or "∕" in s or any(k in s for k in _VARIANT_MAP):
         out = []
         for ch in s:
             if _is_radical_char(ch):
                 out.append(unicodedata.normalize("NFKC", ch))
             elif ch == "∕":
                 out.append("／")
+            elif ch in _VARIANT_MAP:
+                out.append(_VARIANT_MAP[ch])
             else:
                 out.append(ch)
         s = "".join(out)
