@@ -172,7 +172,7 @@ if run_btn:
         from contextlib import redirect_stdout as _rstdout
         _parse_buf = _io.StringIO()
         with _rstdout(_parse_buf):
-            tategu_entries, tategu_ocr_spec = parse_tategu_pdf(tategu_bytes, api_key or None)
+            tategu_entries, tategu_ocr_spec, tategu_ocr_raw = parse_tategu_pdf(tategu_bytes, api_key or None)
         tategu_parse_log = _parse_buf.getvalue()
 
         tategu_err = None
@@ -205,6 +205,18 @@ if run_btn:
                     "チェックポイント: `entries_from_pdfplumber` が0なら pdfplumberで読めていません。"
                     "`cid_detected=True` ならCIDフォントPDFでOCRが必要です。"
                     "`api_key=YES` かつ `Calling Claude API OCR fallback...` が出ればOCRが走っています。"
+                )
+
+        # ── Claude OCR の生出力をUIに表示（OCRが走った場合のみ） ──
+        if tategu_ocr_raw:
+            with st.expander("📋 Claude OCR の生出力（クリックで展開／フィールド欠落の確認用）"):
+                for i, page_text in enumerate(tategu_ocr_raw):
+                    st.markdown(f"**ページ {i+1}**")
+                    st.code(page_text, language="text")
+                st.caption(
+                    "各WD行は9フィールド（8個の「|」）固定。区切り数が足りない場合や、"
+                    "画像で見えている値（品番・敷居色など）が空欄になっている場合は、Claude OCRが読み落としています。"
+                    "その場合はプロンプト調整が必要です。"
                 )
 
         # ── 木工事エントリ解析 ──

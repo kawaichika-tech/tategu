@@ -463,7 +463,17 @@ TATEGU_OCR_PROMPT = (
     "   「枠色は建具仕様をご確認ください」と書かれている場合は空欄。\n"
     "8. SPEC行は必ず「SPEC:」で開始。\n"
     "9. 解説・説明文は一切書かない。WD行 と SPEC行 のみ。\n"
-    "10. 床材・備考・畳タイプ・畳色など、上記以外の行は出力しない。\n"
+    "10. 床材・備考・畳タイプ・畳色など、上記以外の行は出力しない。\n\n"
+    "==========================================\n"
+    "【最重要：絶対に省略しないこと】\n"
+    "==========================================\n"
+    "★ 画像にハッキリ書かれている値は **絶対に省略しない**。空欄出力は「画像に何も書かれていない」場合だけ。\n"
+    "★ 特に以下は読み落としやすいので念入りに：\n"
+    "   - 「品番」（B-XF CL等）：種類の下、「品番」という見出しのすぐ右の値を必ず読む。\n"
+    "   - 「敷居色／種類」（LE ライトグレージュ色 等）：敷居有無の下の行。トイレ・洗面所・脱衣所は通常記載あり。\n"
+    "   - 「把手デザイン」（②SH型 等）：種類の上、丸囲み数字＋型番。\n"
+    "★ 出力前に、各WDの9フィールド全てを画像で再確認すること。空欄が続く場合は本当に画像に何もないか目視で再確認。\n"
+    "★ 「枠色は建具仕様をご確認ください」とだけ書かれているセルは空欄として扱う。それ以外で色名が見えていれば必ず出力する。\n"
 )
 
 
@@ -476,7 +486,8 @@ def ocr_tategu_with_claude(pdf_bytes, api_key):
         raise RuntimeError("anthropic パッケージが見つかりません。`pip install anthropic` を実行してください。")
 
     client = anthropic.Anthropic(api_key=api_key)
-    images = pdf_to_images(pdf_bytes, dpi=200)
+    # DPI 300: 細かい文字（品番・敷居色）の読み取り精度を上げる
+    images = pdf_to_images(pdf_bytes, dpi=300)
     page_texts = []
     for img_bytes in images:
         mime = "image/png"
@@ -485,7 +496,7 @@ def ocr_tategu_with_claude(pdf_bytes, api_key):
         img_b64 = base64.b64encode(img_bytes).decode()
         response = client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=4096,
+            max_tokens=8192,
             messages=[{
                 "role": "user",
                 "content": [
@@ -592,12 +603,13 @@ def parse_tategu_from_claude(page_texts):
 
 
 def parse_tategu_pdf(pdf_bytes, api_key=None):
-    """建具・床図面 → (entriesDict, ocrSpecDict or None) のタプル。
+    """建具・床図面 → (entries, ocrSpec or None, ocrRawPages or None) のタプル。
     pdfplumberによるテキスト抽出を試み、空またはCIDフォント検出時は Claude API ビジョンOCRにフォールバック。
-    OCRが使われた場合は spec_dict も併せて返す（建具仕様セクション抽出用）。
-    OCRが使われなかった場合は spec_dict は None（呼び出し側で parse_building_spec を従来どおり使用）。"""
+    OCRが走った場合は spec / raw_pages も併せて返す。
+    OCRが走らなかった場合は両方 None（呼び出し側で parse_building_spec を従来どおり使用）。"""
     entries = _parse_tategu_pdf_pdfplumber(pdf_bytes)
     ocr_spec = None
+    ocr_raw_pages = None
 
     # CIDフォント / 抽出ゼロ判定
     pages = read_pdf_text(pdf_bytes)
@@ -617,10 +629,12 @@ def parse_tategu_pdf(pdf_bytes, api_key=None):
             if len(ocr_entries) >= len(entries):
                 entries = ocr_entries
                 ocr_spec = ocr_spec_extracted
+            # 生OCR出力は常に保持（UIでデバッグ表示するため）
+            ocr_raw_pages = page_texts
         except Exception as e:
             print(f"[parse_tategu_pdf] Claude OCR fallback error: {e}")
 
-    return entries, ocr_spec
+    return entries, ocr_spec, ocr_raw_pages
 
 
 # ─── OCR（CIDフォントPDF対応） ──────────────────────────────────────────────
@@ -1769,7 +1783,7 @@ def check():
 
         full_text = mokuko_text + "\n" + tategu_text
 
-        tategu_entries, tategu_ocr_spec = parse_tategu_pdf(tategu_bytes, api_key or None)
+        tategu_entries, tategu_ocr_spec, _tategu_ocr_raw = parse_tategu_pdf(tategu_bytes, api_key or None)
 
         if mokuko_manual:
             mokuko_entries = parse_mokuko_manual(mokuko_manual)
