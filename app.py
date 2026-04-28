@@ -26,33 +26,31 @@ import fitz  # PyMuPDF（PDF→画像変換用）
 from flask import Flask, request, jsonify, render_template
 
 
-# PDFのCID系フォント由来で文字が代用されるケースの対処マップ
-# NFKC全体だと丸囲み数字（①→1）が壊れるので、既知の問題文字のみピンポイントで置換する
-_CID_RADICAL_MAP = {
-    "⾊": "色",   # U+2F8A KANGXI RADICAL COLOR → U+8272 色
-    "⼊": "入",   # U+2F0A KANGXI RADICAL ENTER → 入
-    "⼿": "手",   # U+2F4B KANGXI RADICAL HAND → 手
-    "⾨": "門",   # U+2FA8 KANGXI RADICAL GATE → 門
-    "⾞": "車",   # U+2F9E KANGXI RADICAL CART → 車
-    "⾦": "金",   # U+2FA6 KANGXI RADICAL GOLD → 金
-    "⾷": "食",   # U+2FB7 KANGXI RADICAL EAT → 食
-    "⾸": "首",   # U+2FB8 KANGXI RADICAL HEAD → 首
-    "⾺": "馬",   # U+2FBA KANGXI RADICAL HORSE → 馬
-    "⿂": "魚",   # U+2FC2 KANGXI RADICAL FISH → 魚
-    "⿃": "鳥",   # U+2FC3 KANGXI RADICAL BIRD → 鳥
-    "∕": "／",   # U+2215 DIVISION SLASH → U+FF0F FULLWIDTH SOLIDUS
-}
+# Kangxi Radicals (U+2F00..U+2FD5) と CJK Radicals Supplement (U+2E80..U+2EF3)
+# はそれぞれ通常のCJK統合漢字に compatibility decomposition を持つ。
+# CIDフォント由来で 色→⾊・衣→⾐・面→⾯・手→⼿ 等に化けるので、
+# これらの範囲の文字だけ NFKC で正規化する（丸囲み数字 ①→1 は壊さない）。
+def _is_radical_char(ch):
+    c = ord(ch)
+    return (0x2F00 <= c <= 0x2FD5) or (0x2E80 <= c <= 0x2EF3)
 
 
 def _normalize_text(s):
-    """CIDフォント由来で部首/互換文字に化けたものをピンポイントで戻す。
+    """CIDフォント由来で部首文字に化けたものを通常字へ戻す。
     例: 敷居⾊∕種類 → 敷居色／種類。
-    NFKC全体は丸囲み数字（①→1）を壊すので使わない。"""
+    NFKC全体は丸囲み数字（①→1）を壊すので、部首文字だけ選択的に正規化。"""
     if not s:
         return s
-    for k, v in _CID_RADICAL_MAP.items():
-        if k in s:
-            s = s.replace(k, v)
+    if any(_is_radical_char(ch) for ch in s) or "∕" in s:
+        out = []
+        for ch in s:
+            if _is_radical_char(ch):
+                out.append(unicodedata.normalize("NFKC", ch))
+            elif ch == "∕":
+                out.append("／")
+            else:
+                out.append(ch)
+        s = "".join(out)
     return s
 
 app = Flask(__name__)
