@@ -20,9 +20,40 @@ import io
 import os
 import sys
 import base64
+import unicodedata
 import pdfplumber
 import fitz  # PyMuPDF（PDF→画像変換用）
 from flask import Flask, request, jsonify, render_template
+
+
+# PDFのCID系フォント由来で文字が代用されるケースの対処マップ
+# NFKC全体だと丸囲み数字（①→1）が壊れるので、既知の問題文字のみピンポイントで置換する
+_CID_RADICAL_MAP = {
+    "⾊": "色",   # U+2F8A KANGXI RADICAL COLOR → U+8272 色
+    "⼊": "入",   # U+2F0A KANGXI RADICAL ENTER → 入
+    "⼿": "手",   # U+2F4B KANGXI RADICAL HAND → 手
+    "⾨": "門",   # U+2FA8 KANGXI RADICAL GATE → 門
+    "⾞": "車",   # U+2F9E KANGXI RADICAL CART → 車
+    "⾦": "金",   # U+2FA6 KANGXI RADICAL GOLD → 金
+    "⾷": "食",   # U+2FB7 KANGXI RADICAL EAT → 食
+    "⾸": "首",   # U+2FB8 KANGXI RADICAL HEAD → 首
+    "⾺": "馬",   # U+2FBA KANGXI RADICAL HORSE → 馬
+    "⿂": "魚",   # U+2FC2 KANGXI RADICAL FISH → 魚
+    "⿃": "鳥",   # U+2FC3 KANGXI RADICAL BIRD → 鳥
+    "∕": "／",   # U+2215 DIVISION SLASH → U+FF0F FULLWIDTH SOLIDUS
+}
+
+
+def _normalize_text(s):
+    """CIDフォント由来で部首/互換文字に化けたものをピンポイントで戻す。
+    例: 敷居⾊∕種類 → 敷居色／種類。
+    NFKC全体は丸囲み数字（①→1）を壊すので使わない。"""
+    if not s:
+        return s
+    for k, v in _CID_RADICAL_MAP.items():
+        if k in s:
+            s = s.replace(k, v)
+    return s
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 100 * 1024 * 1024
@@ -81,7 +112,7 @@ def read_pdf_text(pdf_bytes):
         with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
             for i, page in enumerate(pdf.pages):
                 text = page.extract_text() or ""
-                pages.append({"page": i + 1, "text": text})
+                pages.append({"page": i + 1, "text": _normalize_text(text)})
     except Exception as e:
         pages.append({"page": 1, "text": "", "error": str(e)})
     return pages
@@ -96,8 +127,15 @@ def split_by_keyword(line, keyword):
 
 
 def find_floor_label(text):
-    m = re.search(r"(\d)階平面図", text)
-    return f"{m.group(1)}F" if m else None
+    # 半角・全角数字どちらにも対応
+    m = re.search(r"([\d０-９])\s*階平面図", text)
+    if not m:
+        return None
+    d = m.group(1)
+    # 全角数字を半角化
+    if "０" <= d <= "９":
+        d = chr(ord(d) - ord("０") + ord("0"))
+    return f"{d}F"
 
 
 def _cluster_words_by_row(words, y_tolerance=10):
@@ -180,6 +218,10 @@ def parse_tategu_pdf(pdf_bytes):
                     pw = pg.extract_words(x_tolerance=5, y_tolerance=5) or []
                 except Exception:
                     pw = []
+                # CIDフォント由来の代用文字を正規化
+                for w in pw:
+                    if "text" in w:
+                        w["text"] = _normalize_text(w["text"])
                 page_words_map[pi + 1] = pw
                 sill_hdrs = [w for w in pw if w["text"] == "敷居有無"]
                 sill_rows_map[pi + 1] = _cluster_words_by_row(sill_hdrs)
